@@ -1,6 +1,6 @@
 ![Python](https://img.shields.io/badge/python-v3.11-blue)
 ![Pytorch](https://img.shields.io/badge/Pytorch-V1.6-orange)
-![Opencv-python](https://img.shields.io/badge/Opencv-python-V4.8.0.76-brightgreen)
+![Opencv-python](https://img.shields.io/badge/OpenCV-V4.8.0.76-brightgreen)
 ![pandas](https://img.shields.io/badge/Pandas-V1.4.2-ff69b4)
 ![numpy](https://img.shields.io/badge/%E2%80%8ENumpy-V1.20.2-success)
 ![releasedate](https://img.shields.io/badge/release%20date-October%2024-red)
