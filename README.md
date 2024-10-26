@@ -8,7 +8,7 @@
 
 # TransDeepSeg: A Transformer-Based Framework with Graph-Based Refinement for Cell Segmentation, Tracking, and Lineage Reconstruction #
 
-The code in this repository is supplementary to our future publication " TransDeepSeg: A Transformer-Based Framework with Graph-Based Refinement for Cell Segmentation, Tracking, and Lineage Reconstruction " 
+The code in this repository is supplementary to our future publication **TransDeepSeg: A Transformer-Based Framework with Graph-Based Refinement for Cell Segmentation, Tracking, and Lineage Reconstruction** 
 
   <div align="center">
     <img src="visualize.gif", width="600">
