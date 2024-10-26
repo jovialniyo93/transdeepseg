@@ -6,7 +6,7 @@
 ![releasedate](https://img.shields.io/badge/release%20date-October%2024-red)
 ![Opensource](https://img.shields.io/badge/OpenSource-Yes!-6f42c1)
 
-#TransDeepSeg: A Transformer-Based Framework with Graph-Based Refinement for Cell Segmentation, Tracking, and Lineage Reconstruction #
+#TransDeepSeg: A Transformer-Based Framework with Graph-Based Refinement for Cell Segmentation, Tracking, and Lineage Reconstruction#
 
 The code in this repository is supplementary to our future publication "TransDeepSeg: A Transformer-Based Framework with Graph-Based Refinement for Cell Segmentation, Tracking, and Lineage Reconstruction" 
 
