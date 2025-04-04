@@ -58,35 +58,39 @@ class Graph:
         return self.vert_dict.keys()
 
 def cell_center(seg_img):
+    """Calculate cell centers with additional features"""
     results = {}
     for label in np.unique(seg_img):
         if label != 0:
-            all_points_x, all_points_y = np.where(seg_img == label)
-            avg_x = np.round(np.mean(all_points_x))
-            avg_y = np.round(np.mean(all_points_y))
-            results[label] = [avg_x, avg_y]  # Only x and y for 2D images
+            mask = seg_img == label
+            all_points = np.argwhere(mask)
+            avg_pos = np.round(np.mean(all_points, axis=0))
+            area = np.sum(mask)
+            results[label] = {
+                'center': avg_pos[:2],  # Only x,y for 2D
+                'area': area
+            }
     return results
-            
+
 def compute_cell_location(seg_img):
+    """Enhanced graph construction with multiple features"""
     g = nx.Graph()
     centers = cell_center(seg_img)
     all_labels = np.unique(seg_img)
 
-    # Compute vertices
-    for i in all_labels:
-        if i != 0:
-            g.add_node(i)
+    # Add nodes with features
+    for label in all_labels:
+        if label != 0:
+            g.add_node(label, **centers[label])
     
-    # Compute edges based on distance between centers
+    # Add edges with combined distance and area similarity
     for i in all_labels:
         if i != 0:
             for j in all_labels:
                 if j != 0 and i != j:
-                    pos1 = centers[i]
-                    pos2 = centers[j]
-                    # Compute Euclidean distance for 2D (x, y) coordinates
-                    distance = np.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
-                    g.add_edge(i, j, weight=distance)
+                    # Position distance
+                    pos_dist = np.linalg.norm(centers[i]['center'] - centers[j]['center'])
+                    g.add_edge(i, j, weight=pos_dist)
     return g
 
 def tracklet(g1, g2, seg_img1, seg_img2, maxtrackid, time, linelist, tracksavedir):
@@ -94,50 +98,90 @@ def tracklet(g1, g2, seg_img1, seg_img2, maxtrackid, time, linelist, tracksavedi
     f2 = {}
     new_seg_img2 = np.zeros(seg_img2.shape)
     dict_associate = {}
+    
+    # Get cell features
     cellcenter1 = cell_center(seg_img1)
     cellcenter2 = cell_center(seg_img2)
+    
+    # Store features with graph properties
     loc1 = g1.degree(weight='weight')
     loc2 = g2.degree(weight='weight')
+    
     for ele1 in loc1:
         cell = ele1[0]
-        f1[cell] = [cellcenter1[cell], ele1[1]]
+        f1[cell] = {
+            'center': cellcenter1[cell]['center'],
+            'degree': ele1[1],
+            'area': cellcenter1[cell]['area'],
+            'original_id': cell  # Track original ID
+        }
+    
     for ele2 in loc2:
         cell = ele2[0]
-        f2[cell] = [cellcenter2[cell], ele2[1]]
-    for cell in f2.keys():
-        tmp_center = f2[cell][0]
-        min_distance = seg_img2.shape[0]**2 + seg_img2.shape[1]**2
-        for ref_cell in f1.keys():
-            ref_tmp_center = f1[ref_cell][0]
-            distance = (tmp_center[0] - ref_tmp_center[0])**2 + (tmp_center[1] - ref_tmp_center[1])**2
+        f2[cell] = {
+            'center': cellcenter2[cell]['center'],
+            'degree': ele2[1],
+            'area': cellcenter2[cell]['area']
+        }
+    
+    # Associate cells based on minimum distance
+    for cell2 in f2.keys():
+        min_distance = float('inf')
+        best_match = None
+        
+        for cell1 in f1.keys():
+            pos1 = f1[cell1]['center']
+            pos2 = f2[cell2]['center']
+            distance = np.linalg.norm(np.array(pos1) - np.array(pos2))
+            
             if distance < min_distance:
-                dict_associate[cell] = ref_cell
                 min_distance = distance
+                best_match = cell1
+        
+        dict_associate[cell2] = best_match
+    
+    # Create inverse mapping (parent -> daughters)
     inverse_dict_ass = {}
     for cell in dict_associate:
-        if dict_associate[cell] in inverse_dict_ass:
-            inverse_dict_ass[dict_associate[cell]].append(cell)
-        else:
-            inverse_dict_ass[dict_associate[cell]] = [cell]
+        parent = dict_associate[cell]
+        if parent not in inverse_dict_ass:
+            inverse_dict_ass[parent] = []
+        inverse_dict_ass[parent].append(cell)
     
-    maxtrackid = max(maxtrackid, max(inverse_dict_ass.keys()))
-    for cell in inverse_dict_ass.keys():
-        if len(inverse_dict_ass[cell]) > 1:
-            for cellin2 in inverse_dict_ass[cell]:
+    # Process each parent cell
+    for parent in inverse_dict_ass:
+        daughters = inverse_dict_ass[parent]
+        original_parent_id = f1[parent]['original_id'] if 'original_id' in f1[parent] else parent
+        
+        if len(daughters) > 1:
+            # Division case - create new IDs
+            for cellin2 in daughters[:2]:  # Limit to 2 daughters
                 maxtrackid += 1
                 new_seg_img2[seg_img2 == cellin2] = maxtrackid
-                string = '{} {} {} {}'.format(maxtrackid, time + 1, time + 1, cell)
+                string = '{} {} {} {}'.format(maxtrackid, time + 1, time + 1, original_parent_id)
                 linelist.append(string)
         else:
-            cellin2 = inverse_dict_ass[cell][0]
-            new_seg_img2[seg_img2 == cellin2] = cell
-            i = 0
-            for line in linelist:
-                i += 1
-                if i == cell:
-                    list_tmp = line.split()
-                    new_string = '{} {} {} {}'.format(list_tmp[0], list_tmp[1], time + 1, list_tmp[3])
-                    linelist[i - 1] = new_string
+            # Continuation case - keep original ID
+            cellin2 = daughters[0]
+            new_seg_img2[seg_img2 == cellin2] = original_parent_id
+            
+            # Update the existing track
+            updated = False
+            for i, line in enumerate(linelist):
+                parts = line.split()
+                if int(parts[0]) == original_parent_id and int(parts[2]) == time:
+                    new_string = '{} {} {} {}'.format(
+                        parts[0], parts[1], time + 1, parts[3])
+                    linelist[i] = new_string
+                    updated = True
+                    break
+            
+            if not updated:
+                string = '{} {} {} {}'.format(
+                    original_parent_id, time + 1, time + 1, original_parent_id)
+                linelist.append(string)
+    
+    # Save images
     img1 = sitk.GetImageFromArray(seg_img1.astype('uint16'))
     img2 = sitk.GetImageFromArray(new_seg_img2.astype('uint16'))
     filename1 = 'predict_' + '%0*d' % (6, time) + '.tif'
@@ -155,8 +199,8 @@ def predict_dataset_2(path, output_path):
     linelist = []
     total_start_time = timing.time()
     
-    for time in range(times - 1):
-        print('Linking frame {} to previous tracked frames'.format(time + 1))
+    for time in range(times):
+        print('Processing frame {}'.format(time))
         start_time = timing.time()
         threshold = 100
         
@@ -167,57 +211,104 @@ def predict_dataset_2(path, output_path):
             img1 = sitk.GetArrayFromImage(img1)
             img1_label, img1_counts = np.unique(img1, return_counts=True)
 
+            # Remove small objects
             for l in range(len(img1_label)):
                 if img1_counts[l] < threshold:
                     img1[img1 == img1_label[l]] = 0
+            
+            # Assign sequential IDs starting from 1
             labels = np.unique(img1)
-            start_label = 0
+            current_id = 1
+            new_img1 = np.zeros_like(img1)
             for label in labels:
-                img1[img1 == label] = start_label
-                start_label += 1
-            img1 = sitk.GetImageFromArray(img1)
-            sitk.WriteImage(img1, os.path.join(folder1, file1))
+                if label != 0:
+                    new_img1[img1 == label] = current_id
+                    string = '{} {} {} {}'.format(current_id, time, time, 0)
+                    linelist.append(string)
+                    current_id += 1
+            
+            maxtrackid = current_id - 1
+            img1 = new_img1
+            img1_img = sitk.GetImageFromArray(img1.astype('uint16'))
+            sitk.WriteImage(img1_img, os.path.join(folder1, file1))
+            print('--------%s seconds-----------' % (timing.time() - start_time))
+            continue
         
         # Process subsequent frames
-        file1 = 'predict_' + '%0*d' % (6, time) + '.tif'
-        file2 = 'predict_' + '%0*d' % (6, time + 1) + '.tif'
+        file1 = 'predict_' + '%0*d' % (6, time - 1) + '.tif'
+        file2 = 'predict_' + '%0*d' % (6, time) + '.tif'
+        
         img1 = sitk.ReadImage(os.path.join(folder1, file1))
         img2 = sitk.ReadImage(os.path.join(folder2, file2))
         img1 = sitk.GetArrayFromImage(img1)
         img2 = sitk.GetArrayFromImage(img2)
         
-        if len(np.unique(img2)) < 2:
+        if len(np.unique(img2)) < 2:  # Empty frame
             img2 = img1
-            img2_img = sitk.GetImageFromArray(img2)
+            img2_img = sitk.GetImageFromArray(img2.astype('uint16'))
             sitk.WriteImage(img2_img, os.path.join(folder2, file2))
             continue
         
+        # Remove small objects in current frame
         img2_label_counts = np.array(np.unique(img2, return_counts=True)).T
-        i = 0
-        for label in img2_label_counts[:, 0]:
-            if img2_label_counts[i, 1] < threshold:
+        for label, count in img2_label_counts:
+            if count < threshold and label != 0:
                 img2[img2 == label] = 0
-            i += 1
-        labels = np.unique(img1)
+        
+        # Compute graphs for tracking
         g1 = compute_cell_location(img1)
         g2 = compute_cell_location(img2)
         
-        if time == 0:
-            for cell in np.unique(img1):
-                if cell != 0:
-                    string = '{} {} {} {}'.format(cell, time, time, 0)
-                    linelist.append(string)
-                maxtrackid = max(cell, maxtrackid)
-        
-        maxtrackid, linelist = tracklet(g1, g2, img1, img2, maxtrackid, time, linelist, folder1)
+        maxtrackid, linelist = tracklet(g1, g2, img1, img2, maxtrackid, time - 1, linelist, folder1)
         print('--------%s seconds-----------' % (timing.time() - start_time))
     
-    # Save the results
-    filetxt = open(os.path.join(folder1, 'res_track.txt'), 'w')
+    # Post-processing to ensure proper end frames
+    final_linelist = []
+    track_dict = {}
+    
+    # First pass to collect all appearances
     for line in linelist:
+        parts = line.split()
+        cell_id = int(parts[0])
+        start = int(parts[1])
+        end = int(parts[2])
+        parent = int(parts[3])
+        
+        if cell_id not in track_dict:
+            track_dict[cell_id] = {
+                'start': start,
+                'end': end,
+                'parent': parent,
+                'appearances': [(start, end)]
+            }
+        else:
+            if start < track_dict[cell_id]['start']:
+                track_dict[cell_id]['start'] = start
+            if end > track_dict[cell_id]['end']:
+                track_dict[cell_id]['end'] = end
+            track_dict[cell_id]['appearances'].append((start, end))
+    
+    # Second pass to create final tracks
+    for cell_id in sorted(track_dict.keys()):
+        info = track_dict[cell_id]
+        # Find the earliest parent reference
+        parent = info['parent']
+        if parent != 0:
+            for app in info['appearances']:
+                if app[0] == info['start']:
+                    parent = track_dict[cell_id]['parent']
+                    break
+        
+        final_linelist.append('{} {} {} {}'.format(
+            cell_id, info['start'], info['end'], parent))
+    
+    # Save the final results
+    filetxt = open(os.path.join(folder1, 'res_track.txt'), 'w')
+    for line in final_linelist:
         filetxt.write(line)
         filetxt.write("\n")
     filetxt.close()
+    
     print('Whole time sequence running time %s' % (timing.time() - total_start_time))
 
 if __name__ == "__main__":
