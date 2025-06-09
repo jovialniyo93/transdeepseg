@@ -36,7 +36,6 @@ def get_coloured_mask(mask):
     coloured_mask = np.stack([r, g, b], axis=2)
     return coloured_mask
 
-# Function to generate traces based on tracking data and image segmentation
 def get_trace(image_path, track_path, trace_path):
     track_picture = sorted([file for file in os.listdir(track_path) if ".tif" in file])
     test_image = sorted([file for file in os.listdir(image_path) if ".tif" in file])
@@ -46,8 +45,8 @@ def get_trace(image_path, track_path, trace_path):
     parent_data = {}
     file = os.path.join(track_path, "res_track.txt")
     with open(file, "r") as f:
-        lines = f.readlines()
-    for line in lines:
+        data = f.readlines()
+    for line in data:
         parts = line.strip().split()
         cell_id = int(parts[0])
         parent_id = int(parts[3])
@@ -56,7 +55,6 @@ def get_trace(image_path, track_path, trace_path):
     for i in range(len(test_image)):
         # Read and process the test image
         image_to_draw = cv2.imread(os.path.join(image_path, test_image[i]), -1)
-        image_to_draw = image_to_draw[5:741, 1:769]
         #image_to_draw = image_to_draw[6:742, 7:743]
         image_to_draw = np.stack((image_to_draw,) * 3, axis=2)
 
@@ -64,9 +62,11 @@ def get_trace(image_path, track_path, trace_path):
         result_picture = cv2.imread(os.path.join(track_path, track_picture[i]), -1)
         label_picture = ((result_picture >= 1) * 255).astype(np.uint8)
 
-        # Draw contours for the current frame (set to white)
+        # Draw white bounding boxes for each cell
         contours, _ = cv2.findContours(label_picture, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        image_to_draw = cv2.drawContours(image_to_draw, contours, -1, (255, 255, 255), 1)
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            cv2.rectangle(image_to_draw, (x, y), (x + w, y + h), (255, 255, 255), 1)
 
         # Draw the tracking label in each cell's centroid (white)
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -96,9 +96,35 @@ def get_trace(image_path, track_path, trace_path):
             image_to_draw = cv2.addWeighted(image_to_draw, 1, colored_mask, 0.5, 0)
 
         # Add the frame number to the top left corner (white)
-        cv2.putText(image_to_draw, f"{i + 1}", (10, 30), font, 1, (255, 255, 255), 3)
+        #cv2.putText(image_to_draw, f"{i + 1}", (10, 30), font, 1, (255, 255, 255), 3)
+        cv2.putText(image_to_draw, f"{i}", (10, 30), font, 1, (255, 255, 255), 3)
         
         trace_image.append(image_to_draw)
+
+    # Read tracking data from res_track.txt
+    lines = [line.strip('\n') for line in data]
+    for line in lines:
+        line = line.split()
+        number = int(line[0])
+        start = int(line[1])
+        end = int(line[2])
+        parent_number = int(line[3])
+
+        # Process for cells that have tracks (multiple frames)
+        if start != end:
+            center = get_center(start, number, track_path)
+            if center:
+                cv2.circle(trace_image[start], center, 3, (0, 0, 255), -1)  # Red dot at the start
+            start_point = center
+
+            # Connect tracked centroids across frames (red lines)
+            for i in range(start + 1, end + 1):
+                center = get_center(i, number, track_path)
+                if center:
+                    cv2.circle(trace_image[i], center, 3, (0, 0, 255), -1)  # Red dot at each point
+                    for j in range(start, i):
+                        cv2.line(trace_image[j], start_point, center, (0, 0, 255), 1)  # Red line for all tracks
+                    start_point = center
 
     # Save traced images
     for i in range(len(trace_image)):
@@ -139,7 +165,7 @@ def createFolder(path):
 # Main execution
 if __name__ == "__main__":
     # Example directories (modify these paths as needed)
-    print("Generating results")
+    print("Generating trace")
     test_folders = os.listdir("nuclear_dataset")
     test_folders = [os.path.join("nuclear_dataset/", folder) for folder in test_folders]
     test_folders.sort()
@@ -147,11 +173,13 @@ if __name__ == "__main__":
     for folder in test_folders:
         test_path = os.path.join(folder, "test")
         track_result_path = os.path.join(folder, "track_result")
-        trace_path = os.path.join(folder, "trace")
+        trace_path = os.path.join(folder, "trace1")
         createFolder(trace_path)
 
         # Ensure trace images are generated before creating the video
         get_trace(test_path, track_result_path, trace_path)
         get_video(trace_path)
+
+    print("Generating trace")
 
     print("Processing completed.")

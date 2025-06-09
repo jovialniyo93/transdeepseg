@@ -50,19 +50,15 @@ conda activate transdeepseg_ve
 
 # How to train and test our model
 
-1. Data augmentation
+1. Model training
 
-python augmentation.py
+python train_segmentation.py --train_set_dir  segmentation_dataset/train/  --lr 0.001 --max_epoch 200 --batch_size 32 --output_dir tmp/
 
-2. Model training
-
-python train.py
-
-3. Model Testing
+2. Model Testing
 
 python test.py
 
-4. Evaluate using Cell-Tracking-Challenge, the MOTChallenge, and the CHOTA metric.
+3. Evaluate using Cell-Tracking-Challenge, the MOTChallenge, and the CHOTA metric.
 The package enables the validation, evaluation, and visualization of tracking results. Below are examples provided for a sample directory organized in the CTC format as follows:
 ```bash
 ctc
