@@ -1,18 +1,12 @@
 import torch
-#from model import DeepSeg
-#from model import StarDistModel
-#from model import Unet
-#from model import FCN8s
-#from model import Cellpose
-#from model import UnetSegmentation
+
 from model import TransformerDeepSeg
-from data_utils import TestDataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import transforms
 import numpy as np
 from torch import nn
 import shutil
-from track import predict_dataset_2
+from track import track
 from generate_trace import get_trace, get_video
 from matplotlib import pyplot as plt
 import os
@@ -28,48 +22,83 @@ def enhance(img):
     img = img.astype(np.uint8)
     return img
 
-def test(test_path, result_path):
+class TestDataset(Dataset):
+    def __init__(self, img_root, transform=None, model_input_size=(576, 576)):
+        imgs = test_dataset(img_root)
+        self.imgs = imgs
+        self.transform=transform
+        self.model_input_size = model_input_size
+
+    def __getitem__(self, index):
+        x_path = self.imgs[index]
+        img_x = cv2.imread(x_path,-1)
+        
+        # Store original dimensions
+        orig_h, orig_w = img_x.shape[:2]
+        
+        # Normalize image to 0-255 range
+        img_x = img_x.astype(np.float32)
+        img_x = (255 * ((img_x - img_x.min()) / (np.ptp(img_x) + 1e-6))).astype(np.uint8)
+        
+        # Resize to model input size
+        img_x = cv2.resize(img_x, self.model_input_size)
+        
+        if self.transform is not None:
+            img_x=self.transform(img_x)
+        return img_x, orig_h, orig_w
+
+    def __len__(self):
+        return len(self.imgs)
+
+def test_dataset(img_root):
+    imgs=[]
+    files = sorted([f for f in os.listdir(img_root) if f.endswith('.tif')])
+    for i, file in enumerate(files):
+        img = os.path.join(img_root, file)
+        imgs.append(img)
+    return imgs
+
+def test(test_path, result_path, model_input_size=(576, 576)):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     x_transforms = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize([0.5], [0.5])
     ])
-    #model = DeepSeg(n_channels=1, n_classes=2, bilinear=True)
-    #model = Unet(n_channels=1, n_classes=2)
-    #model = StarDistModel(n_channels=1, n_classes=2, n_rays=32, bilinear=True)
-    #model = FCN8s(n_channels=1, n_classes=2)
-    #model = Cellpose(n_channels=1, n_classes=2)
-    #model = UnetSegmentation(n_channels=1, n_classes=2)
-    model = TransformerDeepSeg(n_channels=1, n_classes=2, bilinear=True)
+    
+    model = TransformerDeepSeg(n_channels=1, n_classes=2, bilinear=True, img_size=model_input_size[0])
     model.eval()
     model = model.to(device)
 
-    model.load_state_dict(torch.load('tmp/segmentation.pth', map_location=device))
+    checkpoint_path = 'tmp/segmentation.pth'
+    if not os.path.exists(checkpoint_path):
+        print("Warning: Checkpoint not found. Please ensure the model is trained.")
+        return
     
-    test_data = TestDataset(test_path, transform=x_transforms)
+    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    
+    test_data = TestDataset(test_path, transform=x_transforms, model_input_size=model_input_size)
     dataloader = DataLoader(test_data, batch_size=1, num_workers=2)
 
     with torch.no_grad():
-        for index, (x, orig_h, orig_w, top, left) in enumerate(dataloader):
+        for index, (x, orig_h, orig_w) in enumerate(dataloader):
             x = x.to(device)
-            # Convert to integers (batch_size=1, so take first element)
-            orig_h, orig_w, top, left = orig_h.item(), orig_w.item(), top.item(), left.item()
+            orig_h, orig_w = orig_h.item(), orig_w.item()
             
-            # Model returns (logits, edges) - use logits for segmentation
             logits, edges = model(x)
             
-            # Get segmentation prediction
-            pred = torch.argmax(logits, dim=1)  # Get class predictions
+            pred = torch.argmax(logits, dim=1)
             pred = pred.cpu().squeeze().numpy()
             
-            # Convert to binary mask (class 1 = foreground)
             img_y = (pred == 1).astype(np.uint8) * 255
             
-            # Crop back to original size
-            img_y = img_y[top:top+orig_h, left:left+orig_w]
+            # Resize prediction back to original image size
+            img_y = cv2.resize(img_y, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
             
-            cv2.imwrite(os.path.join(result_path, "predict_" + str(index).zfill(6) + '.tif'), img_y)
+            # Save as uncompressed TIFF to avoid imagecodecs dependency
+            cv2.imwrite(os.path.join(result_path, "predict_" + str(index).zfill(6) + '.tif'), 
+                       img_y, [cv2.IMWRITE_TIFF_COMPRESSION, 1])  # 1 = no compression
+    
     print(test_path, "prediction finish!")
 
 def process_img():
@@ -79,7 +108,8 @@ def process_img():
         img_path = os.path.join(img_root, str(i).zfill(6) + ".tif")
         img = cv2.imread(img_path, -1)
         img = np.uint8(np.clip((0.02 * img + 60), 0, 255))
-        cv2.imwrite(img_path, img)
+        # Save as uncompressed TIFF
+        cv2.imwrite(img_path, img, [cv2.IMWRITE_TIFF_COMPRESSION, 1])
 
 def process_predictResult(source_path, result_path):
     if not os.path.isdir(result_path):
@@ -101,7 +131,8 @@ def process_predictResult(source_path, result_path):
         # Convert markers to uint16 for saving as .tif
         markers = np.uint16(markers)
         
-        cv2.imwrite(os.path.join(result_path, name), markers)
+        # Save as uncompressed TIFF
+        cv2.imwrite(os.path.join(result_path, name), markers, [cv2.IMWRITE_TIFF_COMPRESSION, 1])
 
 def useAreaFilter(img, area_size):
     if img.dtype != np.uint8:
@@ -140,6 +171,8 @@ def createFolder(path):
         print(path, "has already existed.")
 
 if __name__ == "__main__":
+    MODEL_INPUT_SIZE = (576, 576)
+    
     test_folders = os.listdir("nuclear_dataset")
     test_folders = [os.path.join("nuclear_dataset/", folder) for folder in test_folders]
     test_folders.sort()
@@ -158,19 +191,20 @@ if __name__ == "__main__":
         createFolder(track_result_path)
         createFolder(trace_path)
 
-        test(test_path, test_result_path)
+        test(test_path, test_result_path, model_input_size=MODEL_INPUT_SIZE)
         process_predictResult(test_result_path, res_path)
 
         result = os.listdir(res_path)
         for picture in result:
             image = cv2.imread(os.path.join(res_path, picture), -1)
             image = useAreaFilter(image, 100)
-            cv2.imwrite(os.path.join(res_result_path, picture), image)
+            # Save as uncompressed TIFF
+            cv2.imwrite(os.path.join(res_result_path, picture), image, [cv2.IMWRITE_TIFF_COMPRESSION, 1])
         
         print("Starting tracking")
         # Track
         predict_result = res_result_path
-        predict_dataset_2(predict_result, track_result_path)
+        track(predict_result, track_result_path)
 
         get_trace(test_path, track_result_path, trace_path)
         get_video(trace_path)

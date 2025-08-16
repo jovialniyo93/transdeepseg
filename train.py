@@ -1,11 +1,5 @@
 # Import the necessary libraries and modules
 import argparse
-#from model import DeepSeg
-#from model import StarDistModel
-#from model import Unet
-#from model import FCN8s
-#from model import Cellpose
-#from model import UnetSegmentation
 from model import TransformerDeepSeg
 from data import BasicSegmentationDataset
 import torch.nn as nn
@@ -89,14 +83,6 @@ def train(args,image_size = [576,576],image_means = [0.5],image_stds= [0.5],trai
 
     valid_iterator = data.DataLoader(valid_data,batch_size = args.batch_size)
 
-    
-    # Define the models
-    #model=DeepSeg(n_channels=1, n_classes=2, bilinear=True)
-    #model=Unet(n_channels=1, n_classes=2)
-    #model=StarDistModel(n_channels=1, n_classes=2, n_rays=32, bilinear=True)
-    #model=FCN8s(n_channels=1, n_classes=2)
-    #model= Cellpose(n_channels=1, n_classes=2)
-    #model= UnetSegmentation(n_channels=1, n_classes=2)
     model= TransformerDeepSeg(n_channels=1, n_classes=2, bilinear=True)
     
     optimizer = optim.RMSprop(model.parameters(), lr=args.lr, weight_decay=1e-8, momentum=0.9)
